@@ -1,0 +1,17 @@
+{
+    "dummy-problem": {
+        "id": "0",
+        "title": "문제 제목 (더미)",
+        "englishTitle": "Dummy Problem Title",
+        "original": "<p>This is a placeholder for the original English description.</p>\n\n<p><strong>Example 1:</strong></p>\n<pre><strong>Input:</strong> a = 1, b = 2\n<strong>Output:</strong> 3</pre>",
+        "description": "<p>여기는 한국어 문제 설명이 들어갈 자리입니다.</p>\n\n<p><strong>예제 1:</strong></p>\n<pre><strong>입력:</strong> a = 1, b = 2\n<strong>출력:</strong> 3</pre>",
+        "hints": [
+            "첫 번째 힌트 내용입니다.",
+            "두 번째 힌트 내용입니다."
+        ],
+        "englishHints": [
+            "This is the first dummy hint.",
+            "This is the second dummy hint."
+        ]
+    }
+}
