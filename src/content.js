@@ -136,6 +136,8 @@ const REGEX_TRANSLATIONS = [
             return `현재 ${year}년 ${month}월 ${parseInt(day, 10)}일까지 ${days}일간의 유예 기간 중입니다. 이 기간 동안 계정 삭제를 취소할 수 있습니다.`;
         }
     },
+    { pattern: /^Starts in\s+(.+)$/i, replacement: (match, time) => `${handleRegexTranslations(time)} 후 시작` },
+    { pattern: /^Ends in\s+(.+)$/i, replacement: (match, time) => `${handleRegexTranslations(time)} 후 종료` },
 ];
 
 let isProblemJsonEnabled = true;
@@ -189,7 +191,11 @@ function updateActiveTranslations() {
 }
 
 function shouldSkipNode(node) {
-    const SKIP_SELECTORS = ['pre', 'code', '.monaco-editor', '.ace_editor', '[contenteditable="true"]'];
+    const SKIP_SELECTORS = [
+        'pre', 'code', '.monaco-editor', '.ace_editor', '[contenteditable="true"]',
+        '.discussion-content', '[data-track-load="discussion_content"]',
+        '.ant-modal', '.ant-popover', '.ant-tooltip'
+    ];
     const parent = node.parentElement;
     if (parent && SKIP_SELECTORS.some(selector => parent.closest(selector))) return true;
     if (node.tagName && ['SCRIPT', 'STYLE', 'NOSCRIPT', 'CODE', 'PRE', 'SVG'].includes(node.tagName)) return true;
@@ -235,8 +241,28 @@ function translateTextNode(node) {
         if (node.nodeValue !== translated) node.nodeValue = translated;
         return;
     }
+    if (/^Starts in\s+\d+d\s+\d{1,2}:\d{2}:\d{2}$/i.test(originalText)) {
+        const translated = originalText.replace(/^Starts in\s+(\d+)d\s+(\d{1,2}:\d{2}:\d{2})$/i, '$1일 $2 후 시작');
+        if (node.nodeValue !== translated) node.nodeValue = translated;
+        return;
+    }
+    if (/^Ends in\s+\d+d\s+\d{1,2}:\d{2}:\d{2}$/i.test(originalText)) {
+        const translated = originalText.replace(/^Ends in\s+(\d+)d\s+(\d{1,2}:\d{2}:\d{2})$/i, '$1일 $2 후 종료');
+        if (node.nodeValue !== translated) node.nodeValue = translated;
+        return;
+    }
     if (/^\d+d\s+\d+h\s+\d+m$/i.test(originalText)) {
         const translated = originalText.replace(/^(\d+)d\s+(\d+)h\s+(\d+)m$/i, '$1일 $2시간 $3분');
+        if (node.nodeValue !== translated) node.nodeValue = translated;
+        return;
+    }
+    if (/^Starts in\s+\d+d\s+\d+h\s+\d+m$/i.test(originalText)) {
+        const translated = originalText.replace(/^Starts in\s+(\d+)d\s+(\d+)h\s+(\d+)m$/i, '$1일 $2시간 $3분 후 시작');
+        if (node.nodeValue !== translated) node.nodeValue = translated;
+        return;
+    }
+    if (/^Ends in\s+\d+d\s+\d+h\s+\d+m$/i.test(originalText)) {
+        const translated = originalText.replace(/^Ends in\s+(\d+)d\s+(\d+)h\s+(\d+)m$/i, '$1일 $2시간 $3분 후 종료');
         if (node.nodeValue !== translated) node.nodeValue = translated;
         return;
     }
@@ -1059,14 +1085,16 @@ async function translateProblemList() {
         } catch { return; }
     }
 
-    if (window.location.href.includes('/studyplan/')) {
+    if (window.location.href.includes('/studyplan/') || window.location.href.includes('/u/')) {
         buildTitleMap();
     }
 
     const candidates = document.querySelectorAll('div, span, a, p');
-    for (const el of candidates) {
+    const isProblemPage = window.location.pathname.includes('/problems/');
 
+    for (const el of candidates) {
         if (el.hasAttribute('data-translated-title')) continue;
+        if (shouldSkipNode(el)) continue;
 
         let targetTextNode = null;
         let text = "";
@@ -1090,24 +1118,32 @@ async function translateProblemList() {
         let translated = false;
 
         const match = text.match(/^(\d+)\.\s+(.+)$/);
-        if (match) {
+        if (match && !isProblemPage) {
             const id = match[1];
+            const titlePart = match[2].trim();
+
             for (const slug in problemDataCache) {
                 const data = problemDataCache[slug];
                 if (data.id === id) {
-                    if (targetTextNode) {
-                        targetTextNode.nodeValue = targetTextNode.nodeValue.replace(text, `${id}. ${data.title}`);
-                    } else {
-                        el.textContent = `${id}. ${data.title}`;
+                    const isTitleMatch = titlePart === data.englishTitle ||
+                        text.toLowerCase().includes(data.englishTitle.toLowerCase()) ||
+                        window.location.href.includes('/studyplan/') || window.location.href.includes('/u/');
+
+                    if (isTitleMatch) {
+                        if (targetTextNode) {
+                            targetTextNode.nodeValue = targetTextNode.nodeValue.replace(text, `${id}. ${data.title}`);
+                        } else {
+                            el.textContent = `${id}. ${data.title}`;
+                        }
+                        el.setAttribute('data-translated-title', 'true');
+                        translated = true;
                     }
-                    el.setAttribute('data-translated-title', 'true');
-                    translated = true;
                     break;
                 }
             }
         }
 
-        if (!translated && window.location.href.includes('/studyplan/')) {
+        if (!translated && (window.location.href.includes('/studyplan/') || window.location.href.includes('/u/'))) {
             const normalizedText = text.toLowerCase().replace(/[^a-z0-9]/g, '');
             if (normalizedText.length > 3 && englishToKoreanTitleMap.has(normalizedText)) {
                 const translatedTitle = englishToKoreanTitleMap.get(normalizedText);
