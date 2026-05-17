@@ -1,17 +1,27 @@
-document.addEventListener('DOMContentLoaded', () => {
-  const toggle = document.getElementById('translationToggle');
+const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
 
-  chrome.storage.local.get(['translationEnabled'], (result) => {
+document.addEventListener('DOMContentLoaded', async () => {
+  const toggle = document.getElementById('translationToggle');
+  const useProblemJson = document.getElementById('useProblemJson');
+
+  const [tab] = await browserAPI.tabs.query({ active: true, currentWindow: true });
+
+  browserAPI.storage.local.get([
+    'translationEnabled',
+    'useProblemJson'
+  ], (result) => {
     toggle.checked = result.translationEnabled !== false;
+    useProblemJson.checked = result.useProblemJson !== false;
+  });
+
+  useProblemJson.addEventListener('change', async () => {
+    await browserAPI.storage.local.set({ useProblemJson: useProblemJson.checked });
+    if (tab && tab.id) browserAPI.tabs.reload(tab.id);
   });
 
   toggle.addEventListener('change', async () => {
     const isEnabled = toggle.checked;
-    await chrome.storage.local.set({ translationEnabled: isEnabled });
-
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.id) {
-      chrome.tabs.reload(tab.id);
-    }
+    await browserAPI.storage.local.set({ translationEnabled: isEnabled });
+    if (tab && tab.id) browserAPI.tabs.reload(tab.id);
   });
 });
