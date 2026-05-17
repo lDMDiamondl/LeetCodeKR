@@ -1,4 +1,91 @@
 let translationMappings = [];
+const SUPABASE_URL = 'URL';
+const SUPABASE_KEY = 'API';
+
+let pendingSlugsToFetch = new Set();
+let batchFetchTimeout = null;
+
+function queueSlugFetch(slug) {
+    if (problemDataCache[slug] || pendingSlugsToFetch.has(slug)) return;
+    pendingSlugsToFetch.add(slug);
+
+    if (batchFetchTimeout) clearTimeout(batchFetchTimeout);
+    batchFetchTimeout = setTimeout(async () => {
+        const slugsToFetch = Array.from(pendingSlugsToFetch);
+        pendingSlugsToFetch.clear();
+
+        if (slugsToFetch.length === 0) return;
+
+        try {
+            const encodedSlugs = slugsToFetch.map(s => `"${s}"`).join(',');
+            const response = await fetch(`${SUPABASE_URL}/rest/v1/problems?slug=in.(${encodedSlugs})`, {
+                headers: {
+                    'apikey': SUPABASE_KEY,
+                    'Authorization': `Bearer ${SUPABASE_KEY}`
+                }
+            });
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const data = await response.json();
+            data.forEach(item => {
+                problemDataCache[item.slug] = {
+                    id: String(item.id),
+                    title: item.title,
+                    englishTitle: item.english_title,
+                    description: item.description,
+                    hints: item.hints || []
+                };
+            });
+            saveProblemCacheToStorage();
+            translateProblemList();
+        } catch (e) {
+            console.error("Failed to batch fetch problem translations by slug", e);
+        }
+    }, 200);
+}
+
+let pendingIdsToFetch = new Set();
+let batchIdFetchTimeout = null;
+
+function queueIdFetch(id) {
+    if (pendingIdsToFetch.has(id)) return;
+    const cached = Object.values(problemDataCache).find(item => item.id === String(id));
+    if (cached) return;
+
+    pendingIdsToFetch.add(id);
+
+    if (batchIdFetchTimeout) clearTimeout(batchIdFetchTimeout);
+    batchIdFetchTimeout = setTimeout(async () => {
+        const idsToFetch = Array.from(pendingIdsToFetch);
+        pendingIdsToFetch.clear();
+
+        if (idsToFetch.length === 0) return;
+
+        try {
+            const response = await fetch(`${SUPABASE_URL}/rest/v1/problems?id=in.(${idsToFetch.join(',')})`, {
+                headers: {
+                    'apikey': SUPABASE_KEY,
+                    'Authorization': `Bearer ${SUPABASE_KEY}`
+                }
+            });
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const data = await response.json();
+            data.forEach(item => {
+                problemDataCache[item.slug] = {
+                    id: String(item.id),
+                    title: item.title,
+                    englishTitle: item.english_title,
+                    description: item.description,
+                    hints: item.hints || []
+                };
+            });
+            saveProblemCacheToStorage();
+            translateProblemList();
+        } catch (e) {
+            console.error("Failed to batch fetch problem translations by ID", e);
+        }
+    }, 200);
+}
+const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
 let isTranslationEnabled = true;
 let activeTranslations = {};
 
@@ -19,8 +106,76 @@ function injectStyles() {
         .dark code, [data-theme="dark"] code {
             background-color: rgba(255, 255, 255, 0.15) !important;
         }
+        
+        /* 알약형 KO|EN 토글 스위치 스타일 */
+        .lk-toggle-container {
+            display: inline-flex;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 0.05);
+            border-radius: 9999px;
+            padding: 3px;
+            user-select: none;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid rgba(0, 0, 0, 0.03);
+            height: 28px;
+            vertical-align: middle;
+            margin-left: 8px;
+        }
+        .dark .lk-toggle-container, [data-theme="dark"] .lk-toggle-container {
+            background-color: rgba(255, 255, 255, 0.07);
+            border-color: rgba(255, 255, 255, 0.03);
+        }
+        .lk-toggle-btn {
+            padding: 0 12px;
+            border-radius: 9999px;
+            color: #8c8c8c;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+        }
+        .dark .lk-toggle-btn, [data-theme="dark"] .lk-toggle-btn {
+            color: rgba(255, 255, 255, 0.6);
+        }
+        .lk-toggle-btn.active {
+            background-color: #00b5ad;
+            color: #ffffff !important;
+            font-weight: 600;
+            box-shadow: 0 1px 3px rgba(0, 181, 173, 0.4);
+        }
+        .lk-toggle-divider {
+            width: 1px;
+            height: 12px;
+            background-color: rgba(0, 0, 0, 0.12);
+            margin: 0 1px;
+        }
+        .dark .lk-toggle-divider, [data-theme="dark"] .lk-toggle-divider {
+            background-color: rgba(255, 255, 255, 0.15);
+        }
+        .lk-toggle-container:hover {
+            background-color: rgba(0, 0, 0, 0.08);
+        }
+        .dark .lk-toggle-container:hover, [data-theme="dark"] .lk-toggle-container:hover {
+            background-color: rgba(255, 255, 255, 0.12);
+        }
     `;
-    document.head.appendChild(style);
+    const target = document.head || document.documentElement;
+    if (target) {
+        target.appendChild(style);
+    } else {
+        const observer = new MutationObserver(() => {
+            const t = document.head || document.documentElement;
+            if (t) {
+                t.appendChild(style);
+                observer.disconnect();
+            }
+        });
+        observer.observe(document, { childList: true, subtree: true });
+    }
 }
 injectStyles();
 
@@ -119,6 +274,7 @@ const REGEX_TRANSLATIONS = [
     { pattern: /^(\d{1,2})\/(\d{4})$/, replacement: '$2년 $1월' },
     { pattern: /^Solved\s+([\d,]+)\s+problems?$/i, replacement: '$1문제 해결' },
     { pattern: /^(\d+)\s+Levels?$/i, replacement: '$1 단계' },
+    { pattern: /^(\d+\/\d+)\s+Levels?$/i, replacement: '$1 단계' },
     { pattern: /^A verification code has (?:been )?sent to (.+?)\.?$/i, replacement: '인증 코드가 $1로 전송되었습니다.' },
     { pattern: /^(\d+)\s+Selected$/i, replacement: '$1개 선택됨' },
     { pattern: /^Case\s+(\d+)$/i, replacement: '케이스 $1' },
@@ -138,11 +294,26 @@ const REGEX_TRANSLATIONS = [
     },
     { pattern: /^Starts in\s+(.+)$/i, replacement: (match, time) => `${handleRegexTranslations(time)} 후 시작` },
     { pattern: /^Ends in\s+(.+)$/i, replacement: (match, time) => `${handleRegexTranslations(time)} 후 종료` },
+    { pattern: /^Score\s*\((\d+)pt\.\)$/i, replacement: '점수 ($1pt.)' },
+    {
+        pattern: /^Conv\.\s*(\d+)$/i,
+        replacement: (match, n) => `대화 ${n}`
+    },
+
+    {
+        pattern: /^(\d+)\/(\d+)\s*Lang\.$/i,
+        replacement: (match, a, b) => `${a}/${b} 언어`
+    },
+    {
+        pattern: /^Trials?\s*(\d+)$/i,
+        replacement: (match, n) => `시도 ${n}`
+    },
 ];
 
 let isProblemJsonEnabled = true;
+let currentToggleLanguage = 'KO';
 
-chrome.storage.local.get(['translationEnabled', 'useProblemJson'], (result) => {
+browserAPI.storage.local.get(['translationEnabled', 'useProblemJson', 'problemDataCache', 'preferredLanguage'], (result) => {
     if (result.translationEnabled === false) {
         isTranslationEnabled = false;
         return;
@@ -152,16 +323,28 @@ chrome.storage.local.get(['translationEnabled', 'useProblemJson'], (result) => {
         isProblemJsonEnabled = false;
     }
 
-    initProblemTranslation();
-    if (document.body) {
-        translateProblemList();
-
-        mainObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-
-        urlObserver.observe(document.body, { childList: true, subtree: true });
+    if (result.problemDataCache) {
+        problemDataCache = { ...result.problemDataCache, ...problemDataCache };
     }
 
-    fetch(chrome.runtime.getURL('src/translations.json'))
+    if (result.preferredLanguage) {
+        currentToggleLanguage = result.preferredLanguage;
+    }
+
+    initProblemTranslation();
+    const targetNode = document.documentElement || document;
+    mainObserver.observe(targetNode, { childList: true, subtree: true, characterData: true });
+    urlObserver.observe(targetNode, { childList: true, subtree: true });
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            translateProblemList();
+        });
+    } else {
+        translateProblemList();
+    }
+
+    fetch(browserAPI.runtime.getURL('src/translations.json'))
         .then(response => response.json())
         .then(data => {
             translationMappings = data;
@@ -177,8 +360,8 @@ function updateActiveTranslations() {
     activeTranslations = {};
     for (const mapping of translationMappings) {
         const isMatch = Array.isArray(mapping.urlPattern)
-            ? mapping.urlPattern.some(p => currentPath.startsWith(p) || p === "/")
-            : currentPath.startsWith(mapping.urlPattern) || mapping.urlPattern === "/";
+            ? mapping.urlPattern.some(p => p === "/" ? true : currentPath.includes(p.replace(/\/$/, "")))
+            : (mapping.urlPattern === "/" ? true : currentPath.includes(mapping.urlPattern.replace(/\/$/, "")));
 
         if (isMatch) {
             Object.assign(activeTranslations, mapping.translations);
@@ -194,10 +377,22 @@ function shouldSkipNode(node) {
     const SKIP_SELECTORS = [
         'pre', 'code', '.monaco-editor', '.ace_editor', '[contenteditable="true"]',
         '.discussion-content', '[data-track-load="discussion_content"]',
-        '.ant-modal', '.ant-popover', '.ant-tooltip'
+        '.markdown-content', '.markdown-body', '.prose'
     ];
     const parent = node.parentElement;
     if (parent && SKIP_SELECTORS.some(selector => parent.closest(selector))) return true;
+
+    if (parent && parent.closest('[class*="preview" i]:not(button):not(a)')) {
+        const previewElement = parent.closest('[class*="preview" i]:not(button):not(a)');
+        if (previewElement.tagName === 'DIV' || previewElement.tagName === 'SECTION') {
+            return true;
+        }
+    }
+
+    if (parent && parent.closest('a[href*="/solutions/"]')) {
+        const a = parent.closest('a[href*="/solutions/"]');
+        if (/\/solutions\/\d+/.test(a.href)) return true;
+    }
     if (node.tagName && ['SCRIPT', 'STYLE', 'NOSCRIPT', 'CODE', 'PRE', 'SVG'].includes(node.tagName)) return true;
     return false;
 }
@@ -224,6 +419,12 @@ function handleRegexTranslations(text) {
     }
 
     for (const { pattern, replacement } of REGEX_TRANSLATIONS) {
+        if ((window.location.pathname.includes('/submissions/') || window.location.pathname.includes('/contest/')) && pattern.source.includes('Accepted')) {
+            continue;
+        }
+        if (window.location.pathname.includes('/subscribe/') && pattern.source.includes('Questions?')) {
+            continue;
+        }
         if (pattern.test(newText)) {
             newText = newText.replace(pattern, replacement);
             break;
@@ -286,7 +487,7 @@ function translateTextNode(node) {
 
     let translatedText = handleRegexTranslations(originalText);
 
-    if (translatedText === originalText && /^Accepted$/i.test(originalText)) {
+    if (translatedText === originalText && /^Accepted$/i.test(originalText) && !window.location.pathname.includes('/submissions/') && !window.location.pathname.includes('/contest/')) {
         const el = node.parentElement;
         const container = el?.parentElement;
         const contextText = (container?.textContent || el?.textContent || "");
@@ -298,7 +499,14 @@ function translateTextNode(node) {
 
     if (translatedText === originalText && activeTranslations[originalText]) {
         if (!node.parentElement?.hasAttribute('data-keep-original-text')) {
-            translatedText = activeTranslations[originalText];
+            const isPostContent = window.location.pathname.includes('/post-solution/') || window.location.pathname.includes('/discuss/');
+            const isMarkdownTag = node.parentElement?.closest('h1, h2, h3, h4, h5, h6, p, blockquote');
+
+            if (isPostContent && isMarkdownTag) {
+
+            } else {
+                translatedText = activeTranslations[originalText];
+            }
         }
     }
 
@@ -322,6 +530,65 @@ function translateElementAttributes(element) {
 function handleSpecialUIPatterns(element) {
     const text = element.textContent.trim();
 
+    if (element.classList && element.classList.contains('btn') && text.replace(/\s+/g, ' ').trim() === "Clear Console") {
+        const innerSpan = element.querySelector('.unify-too-small, .split-too-small');
+        if (innerSpan && innerSpan.textContent.trim() === "Console") {
+            if (element.hasAttribute('data-translated-clear-console')) return true;
+
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+            let node;
+            let clearNode = null;
+            while ((node = walker.nextNode())) {
+                if (node.nodeValue.includes("Clear")) {
+                    clearNode = node;
+                    break;
+                }
+            }
+
+            if (clearNode) {
+                innerSpan.textContent = "콘솔";
+                clearNode.nodeValue = " 비우기";
+                element.insertBefore(innerSpan, clearNode);
+                element.setAttribute('data-translated-clear-console', 'true');
+                return true;
+            }
+        }
+    }
+
+    if (element.tagName === 'BUTTON' && element.classList.contains('run-code-btn')) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+        let node;
+        let modified = false;
+        while ((node = walker.nextNode())) {
+            const val = node.nodeValue.trim();
+            if (val === "Run") {
+                node.nodeValue = node.nodeValue.replace("Run", "코드");
+                modified = true;
+            } else if (val === "Code") {
+                node.nodeValue = node.nodeValue.replace("Code", "실행");
+                modified = true;
+            }
+        }
+        if (modified) return true;
+    }
+
+    if (element.tagName === 'SPAN' && element.classList.contains('split-too-small')) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+        let node;
+        let modified = false;
+        while ((node = walker.nextNode())) {
+            const val = node.nodeValue.trim();
+            if (val === "Output") {
+                node.nodeValue = node.nodeValue.replace("Output", "출력");
+                modified = true;
+            } else if (val === "Input") {
+                node.nodeValue = node.nodeValue.replace("Input", "입력");
+                modified = true;
+            }
+        }
+        if (modified) return true;
+    }
+
     if (text === "Ask Leet" && !hasChildWithSameText(element, "Ask Leet")) {
         const span = element.querySelector('span');
         if (span && span.textContent.trim() === "Leet") {
@@ -337,6 +604,113 @@ function handleSpecialUIPatterns(element) {
 
     if (handleBannerTranslations(element, text)) return true;
     if (handleKeywordPopovers(element, text)) return true;
+
+    if (/^Conv\.\s*\d+$/.test(text) && window.location.href.includes('/contest/')) {
+        const m = text.match(/^Conv\.\s*(\d+)$/i);
+        if (m) {
+            const result = `대화 ${m[1]}`;
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+            let node;
+            let first = true;
+            while ((node = walker.nextNode())) {
+                if (first && node.nodeValue.trim().length > 0) {
+                    node.nodeValue = result;
+                    first = false;
+                } else if (!first) {
+                    node.nodeValue = '';
+                }
+            }
+            return true;
+        }
+    }
+
+    if (/^Trials?\s*\d+$/.test(text) && window.location.href.includes('/contest/')) {
+        const m = text.match(/^Trials?\s*(\d+)$/i);
+        if (m) {
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+            let node;
+            while ((node = walker.nextNode())) {
+                if (node.nodeValue.trim().length > 0) {
+                    node.nodeValue = `시도 ${m[1]}`;
+                    break;
+                }
+            }
+            return true;
+        }
+    }
+
+    if (/^\d+\/\d+\s*Lang\.$/.test(text)) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+        let node;
+        while ((node = walker.nextNode())) {
+            if (/Lang\./.test(node.nodeValue)) {
+                node.nodeValue = node.nodeValue.replace(/Lang\./, '언어');
+                return true;
+            }
+        }
+    }
+
+    if (/^~?\d+\s*Avg\.?\s*Trials?$/.test(text)) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+        let node;
+        while ((node = walker.nextNode())) {
+            if (/Avg/i.test(node.nodeValue)) {
+                node.nodeValue = node.nodeValue.replace(/Avg\.?\s*Trials?/i, '평균 시도');
+                return true;
+            }
+        }
+    }
+
+    if (/^Solved\s+[\d,]+\s+problems?$/i.test(text)) {
+        const m = text.match(/^Solved\s+([\d,]+)\s+problems?$/i);
+        if (m) {
+            element.setAttribute('data-translated-title', 'true');
+            element.textContent = `${m[1]}문제 해결`;
+            return true;
+        }
+    }
+
+    if (/^Your last submission beat ([\d.]+)% of other submissions' (runtime|memory usage)\.?$/i.test(text)) {
+        const m = text.match(/^Your last submission beat ([\d.]+)% of other submissions' (runtime|memory usage)\.?$/i);
+        if (m) {
+            const typeKr = m[2].toLowerCase().includes('runtime') ? '실행 시간' : '메모리 사용량';
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+            let node;
+            while ((node = walker.nextNode())) {
+                if (/Your last submission beat/i.test(node.nodeValue)) {
+                    node.nodeValue = '최근 제출이 다른 제출의 ';
+                } else if (/of other submissions'/i.test(node.nodeValue)) {
+                    node.nodeValue = `보다 ${typeKr} 성능이 우수합니다.`;
+                }
+            }
+            return true;
+        }
+    }
+
+
+    if (text.includes("Ranking of") && text.length < 200) {
+        const contestLink = element.querySelector('a[href*="/contest/"]');
+        if (contestLink) {
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+            let node;
+            let replaced = false;
+            while ((node = walker.nextNode())) {
+                if (node.nodeValue.includes("Ranking of")) {
+                    node.nodeValue = node.nodeValue.replace(/Ranking of\s*/i, "");
+                    replaced = true;
+                }
+            }
+            if (replaced) {
+                const suffix = document.createTextNode(" 순위");
+                if (contestLink.nextSibling) {
+                    contestLink.parentNode.insertBefore(suffix, contestLink.nextSibling);
+                } else {
+                    contestLink.parentNode.appendChild(suffix);
+                }
+                return true;
+            }
+        }
+    }
 
     const beatsMatch = text.match(/Beats\s*([\d.]+)%/i);
     if (beatsMatch && text.length < 150) {
@@ -546,7 +920,8 @@ function handleKeywordPopovers(element, text) {
     };
 
     if (KEYWORD_DEFS[normalizedText]) {
-        element.innerHTML = KEYWORD_DEFS[normalizedText];
+        const doc = new DOMParser().parseFromString(KEYWORD_DEFS[normalizedText], 'text/html');
+        element.replaceChildren(...doc.body.childNodes);
         return true;
     }
     return false;
@@ -560,7 +935,58 @@ function hasChildWithSameText(element, text) {
 }
 
 function handleBannerTranslations(element, text) {
+
+    if (element.querySelector('div')) {
+        return false;
+    }
+
     const normalizedText = text.replace(/\s+/g, ' ').trim();
+
+    const priceCurrencyMatch = normalizedText.match(/^(?:Prices are marked in|가격 표기 기준:)\s*([a-zA-Z]+)\.?$/i);
+    if (priceCurrencyMatch) {
+        const currency = priceCurrencyMatch[1].trim();
+        element.textContent = `가격은 ${currency} 기준으로 표기됩니다.`;
+        return true;
+    }
+
+    if (text.includes("Submissions Detail -") && text.length < 200) {
+        const link = element.querySelector('a[href*="/problems/"]');
+        if (link) {
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+            let node;
+            while ((node = walker.nextNode())) {
+                if (node.nodeValue.includes("Submissions Detail -")) {
+                    node.nodeValue = node.nodeValue.replace("Submissions Detail -", "제출 상세 정보 -");
+                }
+            }
+            const urlMatch = link.href.match(/\/problems\/([^/?#]+)/);
+            if (urlMatch && problemDataCache) {
+                const slug = urlMatch[1];
+                const data = problemDataCache[slug];
+                if (data && data.title) {
+                    link.textContent = data.title;
+                }
+            }
+            return true;
+        }
+    }
+
+    if (text.startsWith("Evaluated") && text.includes("based on") && text.includes("brand-new problems")) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+        let node;
+        while ((node = walker.nextNode())) {
+            let val = node.nodeValue;
+            if (val.includes("Evaluated")) val = val.replace("Evaluated", "평가 모델:");
+            if (val.includes("based on")) val = val.replace("based on", "/ 기준:");
+            if (val.includes(", featuring")) val = val.replace(", featuring", "(신규 문제");
+            if (val.includes("brand-new problems")) val = val.replace(/\s*brand-new problems, with a total score of\s*/, "개, 총 ");
+            if (val.includes("points. The results are as follows:")) val = val.replace(/\s*points\. The results are as follows:/, "점). 결과는 다음과 같습니다:");
+            if (val !== node.nodeValue) {
+                node.nodeValue = val;
+            }
+        }
+        return true;
+    }
 
     if (normalizedText === "For additional LeetCoins, please refer to this discuss post.") {
         const linkNode = element.querySelector('a');
@@ -584,6 +1010,157 @@ function handleBannerTranslations(element, text) {
             element.appendChild(document.createTextNode("에 저장됩니다."));
             return true;
         }
+    }
+
+    if (normalizedText === "Gain exclusive access to our ever-growing collection of premium content, such as questions, Explore cards, and premium solutions like this.") {
+        const linkNode = element.querySelector('a');
+        if (linkNode && linkNode.textContent.trim() === "this") {
+            const clone = linkNode.cloneNode(true);
+            clone.textContent = "이와 같은";
+            element.textContent = "지속적으로 추가되는 프리미엄 문제, 학습 카드, 그리고 ";
+            element.appendChild(clone);
+            element.appendChild(document.createTextNode(" 프리미엄 솔루션 등 엄선된 프리미엄 콘텐츠를 독점으로 이용해 보세요."));
+            return true;
+        }
+    }
+
+    if (normalizedText === "LeetCode offers high-quality official solutions for a large selection of our problems. Some of these solutions are only available to premium subscribers. You can view a sample article here for free. We are constantly adding new solutions.") {
+        const linkNode = element.querySelector('a');
+        if (linkNode) {
+            const clone = linkNode.cloneNode(true);
+            clone.textContent = "여기";
+            element.textContent = '';
+            element.appendChild(document.createTextNode("LeetCode는 수많은 문제에 대해 고품질의 공식 솔루션을 제공합니다. 이 중 일부 솔루션은 프리미엄 구독자만 이용할 수 있습니다. 샘플 솔루션은 "));
+            element.appendChild(clone);
+            element.appendChild(document.createTextNode("에서 무료로 확인하실 수 있습니다. 새로운 솔루션이 지속적으로 추가되고 있습니다."));
+            return true;
+        }
+    }
+
+    if (normalizedText === "We compile lists of questions asked by specific companies based on data from user surveys: e.g., \"Have you seen this question in a real interview?\" These lists are frequently updated with our ever-growing survey data. You can find the list of companies on the Problem List page.") {
+        const linkNode = element.querySelector('a');
+        if (linkNode) {
+            const clone = linkNode.cloneNode(true);
+            clone.textContent = "문제 리스트 페이지";
+            element.textContent = '';
+            element.appendChild(document.createTextNode("저희는 사용자 설문 조사 데이터(예: \"실제 면접에서 이 문제를 보신 적이 있습니까?\")를 바탕으로 특정 기업에서 출제된 문제 리스트를 구성합니다. 이 리스트는 계속 늘어나는 설문 조사 데이터를 통해 수시로 업데이트됩니다. 기업 리스트는 "));
+            element.appendChild(clone);
+            element.appendChild(document.createTextNode("에서 확인하실 수 있습니다."));
+            return true;
+        }
+    }
+
+    if (normalizedText === "You may access your subscription page to confirm your subscription. Please check your billing history to make sure the transaction went through. If you didn't see a new transaction, your card has probably been declined. Please try subscribing again with a different debit/credit card or contact your bank for more information. Please contact us if you still encounter issues.") {
+        const links = element.querySelectorAll('a');
+        if (links.length >= 3) {
+            const subLink = links[0].cloneNode(true);
+            subLink.textContent = "구독 페이지";
+
+            const billingLink = links[1].cloneNode(true);
+            billingLink.textContent = "결제 내역";
+
+            const contactLink = links[2].cloneNode(true);
+            contactLink.textContent = "문의하기";
+
+            element.textContent = '';
+            element.appendChild(document.createTextNode("구독 신청을 확인하려면 "));
+            element.appendChild(subLink);
+            element.appendChild(document.createTextNode("를 이용하실 수 있습니다. 결제가 정상적으로 처리되었는지 확인하려면 "));
+            element.appendChild(billingLink);
+            element.appendChild(document.createTextNode("을 확인해 주세요. 새로운 결제 내역이 보이지 않는다면 카드가 거절되었을 수 있습니다. 다른 체크/신용 카드로 다시 구독을 시도하거나 은행에 문의해 주시기 바랍니다. 문제가 지속될 경우 "));
+            element.appendChild(contactLink);
+            element.appendChild(document.createTextNode("를 이용해 주세요."));
+            return true;
+        }
+    }
+
+    if (normalizedText === "You can cancel your subscription here at any time. Once canceled, your subscription will remain active until the end of the current period.") {
+        const linkNode = element.querySelector('a');
+        if (linkNode) {
+            const clone = linkNode.cloneNode(true);
+            clone.textContent = "여기";
+            element.textContent = '';
+            element.appendChild(document.createTextNode("구독은 언제든지 "));
+            element.appendChild(clone);
+            element.appendChild(document.createTextNode("에서 취소하실 수 있습니다. 취소하더라도 현재 구독 기간이 만료될 때까지는 구독 상태가 활성 상태로 유지됩니다."));
+            return true;
+        }
+    }
+
+    if (normalizedText === "Get started with a LeetCode Subscription that works for you.") {
+        element.textContent = "나에게 맞는 LeetCode 구독을 시작해 보세요.";
+        return true;
+    }
+
+    if (normalizedText === "Our monthly plan grants access to all premium features, the best plan for short-term subscribers.") {
+        const boldSpan = element.querySelector('[class*="font-semibold"]');
+        const cls = boldSpan ? boldSpan.className : 'font-semibold';
+
+        element.textContent = '';
+        element.appendChild(document.createTextNode('월간 요금제는 '));
+        const span = document.createElement('span');
+        span.className = cls;
+        span.textContent = '모든 프리미엄 기능';
+        element.appendChild(span);
+        element.appendChild(document.createTextNode('을 제공하며, 단기 구독자에게 가장 적합한 요금제입니다.'));
+        return true;
+    }
+
+    {
+        const yearlyMatch = normalizedText.match(/^Our most popular plan previously sold for \$299 and is now only (.+?)\/month\.\s*This plan saves you over 62% in comparison to the monthly plan\.$/i);
+        if (yearlyMatch && normalizedText.length < 200) {
+            const price = yearlyMatch[1];
+            const boldSpan = element.querySelector('[class*="font-semibold"]');
+            const cls = boldSpan ? boldSpan.className : 'font-semibold';
+
+            element.textContent = '';
+            element.appendChild(document.createTextNode('기존 $299에서 할인된 가격으로, 현재 월 ' + price + '에 이용할 수 있는 '));
+            const span1 = document.createElement('span');
+            span1.className = cls;
+            span1.textContent = '가장 인기 있는';
+            element.appendChild(span1);
+            element.appendChild(document.createTextNode(' 요금제입니다.'));
+            element.appendChild(document.createElement('br'));
+            element.appendChild(document.createTextNode('월간 요금제 대비 '));
+            const span2 = document.createElement('span');
+            span2.className = cls;
+            span2.textContent = '62% 이상의 비용을 절약';
+            element.appendChild(span2);
+            element.appendChild(document.createTextNode('할 수 있습니다.'));
+            return true;
+        }
+    }
+
+    {
+        const yearlyOnlyMatch = normalizedText.match(/^Our most popular plan previously sold for \$299 and is now only (.+?)\/month\.?$/i);
+        if (yearlyOnlyMatch && normalizedText.length < 120) {
+            const price = yearlyOnlyMatch[1];
+            const boldSpan = element.querySelector('[class*="font-semibold"]');
+            const cls = boldSpan ? boldSpan.className : 'font-semibold';
+
+            element.textContent = '';
+            element.appendChild(document.createTextNode('기존 $299에서 할인된 가격으로, 현재 월 ' + price + '에 이용할 수 있는 '));
+            const span = document.createElement('span');
+            span.className = cls;
+            span.textContent = '가장 인기 있는';
+            element.appendChild(span);
+            element.appendChild(document.createTextNode(' 요금제입니다.'));
+            return true;
+        }
+    }
+
+    if (normalizedText === "This plan saves you over 62% in comparison to the monthly plan.") {
+        const boldSpan = element.querySelector('[class*="font-semibold"]');
+        const cls = boldSpan ? boldSpan.className : 'font-semibold';
+
+        element.textContent = '';
+        element.appendChild(document.createTextNode('월간 요금제 대비 '));
+        const span = document.createElement('span');
+        span.className = cls;
+        span.textContent = '62% 이상의 비용을 절약';
+        element.appendChild(span);
+        element.appendChild(document.createTextNode('할 수 있습니다.'));
+        return true;
     }
 
     const coolOffMatch = normalizedText.match(/^You are currently under a (\d+)-day cool-off period until (\d{4}-\d{2}-\d{2}) UTC\.?\s*During this cool-off period, you can cancel your account deletion\.?$/i);
@@ -775,6 +1352,8 @@ function translateNode(node) {
 }
 
 let debounceTimer = null;
+let heavyScanDebounceTimer = null;
+
 const mainObserver = new MutationObserver((mutations) => {
     if (!isTranslationEnabled) return;
 
@@ -790,22 +1369,40 @@ const mainObserver = new MutationObserver((mutations) => {
         }
     });
 
-    translateProblemList();
-    if (extractProblemSlug()) initProblemTranslation();
-    if (pendingHintTranslations && pendingHintTranslations.length > 0) {
-        applyHintsIfExpanded();
-    }
+    if (heavyScanDebounceTimer) clearTimeout(heavyScanDebounceTimer);
+    heavyScanDebounceTimer = setTimeout(() => {
+        if (!isTranslationEnabled) return;
 
-    if (needsFullScan) {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            if (isTranslationEnabled) translateNode(document.body);
-        }, 150);
-    }
+        translateProblemList();
+        if (extractProblemSlug()) initProblemTranslation();
+        if (pendingHintTranslations && pendingHintTranslations.length > 0) {
+            applyHintsIfExpanded();
+        }
+
+        if (needsFullScan) {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                if (isTranslationEnabled) translateNode(document.body);
+            }, 150);
+        }
+    }, 100);
 });
 
 let currentProblemSlug = null;
-let problemDataCache = null;
+let problemDataCache = {};
+let originalProblemDataCache = {};
+
+function saveProblemCacheToStorage() {
+    try {
+        browserAPI.storage.local.set({ problemDataCache });
+    } catch (e) {
+        console.error("Failed to save problem cache to storage", e);
+    }
+}
+
+async function fetchProblemData() {
+    return problemDataCache;
+}
 
 let isProblemTranslationApplied = false;
 
@@ -827,9 +1424,27 @@ async function initProblemTranslation() {
     if (!isProblemJsonEnabled) return;
 
     try {
-        if (!problemDataCache) {
-            const res = await fetch(chrome.runtime.getURL('src/problem.json'));
-            problemDataCache = await res.json();
+        if (!problemDataCache[slug]) {
+            const response = await fetch(`${SUPABASE_URL}/rest/v1/problems?slug=eq.${slug}`, {
+                headers: {
+                    'apikey': SUPABASE_KEY,
+                    'Authorization': `Bearer ${SUPABASE_KEY}`
+                }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                if (data && data.length > 0) {
+                    const item = data[0];
+                    problemDataCache[slug] = {
+                        id: String(item.id),
+                        title: item.title,
+                        englishTitle: item.english_title,
+                        description: item.description,
+                        hints: item.hints || []
+                    };
+                    saveProblemCacheToStorage();
+                }
+            }
         }
 
         if (problemDataCache[slug]) {
@@ -844,7 +1459,9 @@ async function initProblemTranslation() {
                 if (attempts > 20) clearInterval(tryApply);
             }, 500);
         }
-    } catch { }
+    } catch (e) {
+        console.error("Failed to load individual problem translation", e);
+    }
 }
 
 let lastPathname = location.pathname;
@@ -914,8 +1531,138 @@ function extractProblemSlug() {
     return match ? match[1] : null;
 }
 
+function safeSetInnerHTML(element, htmlString) {
+    while (element.firstChild) {
+        element.removeChild(element.firstChild);
+    }
+    const parsedDoc = new DOMParser().parseFromString(htmlString, 'text/html');
+    element.replaceChildren(...parsedDoc.body.childNodes);
+}
+
+function findBadgeContainer(titleEl) {
+    if (!titleEl) return null;
+
+    let parent = titleEl.parentElement;
+    for (let depth = 0; depth < 4 && parent; depth++) {
+        const diffBadges = Array.from(parent.querySelectorAll('div, span')).filter(el => {
+            const txt = el.textContent.trim();
+            return ['Easy', 'Medium', 'Hard', '쉬움', '보통', '어려움'].includes(txt);
+        });
+
+        if (diffBadges.length > 0) {
+            const badge = diffBadges[0];
+            const container = badge.parentElement;
+            if (container && (container.classList.contains('flex') || container.tagName === 'DIV')) {
+                return container;
+            }
+        }
+        parent = parent.parentElement;
+    }
+
+    const diffBadges = Array.from(document.querySelectorAll('div')).filter(el => {
+        const txt = el.textContent.trim();
+        return ['Easy', 'Medium', 'Hard', '쉬움', '보통', '어려움'].includes(txt) && el.children.length === 0;
+    });
+    if (diffBadges.length > 0) {
+        return diffBadges[0].parentElement;
+    }
+
+    return null;
+}
+
+function injectTogglePill(slug) {
+    const titleEl = findTitleElement();
+    if (!titleEl) return;
+
+    const container = findBadgeContainer(titleEl);
+    if (!container) return;
+
+    if (document.getElementById('lk-lang-toggle')) {
+        updateToggleButtonsUI();
+        return;
+    }
+
+    const toggleContainer = document.createElement('div');
+    toggleContainer.className = 'lk-toggle-container';
+    toggleContainer.id = 'lk-lang-toggle';
+    safeSetInnerHTML(toggleContainer, `
+        <div class="lk-toggle-btn ${currentToggleLanguage === 'KO' ? 'active' : ''}" id="lk-btn-ko">KO</div>
+        <div class="lk-toggle-divider"></div>
+        <div class="lk-toggle-btn ${currentToggleLanguage === 'EN' ? 'active' : ''}" id="lk-btn-en">EN</div>
+    `);
+
+    const btnKo = toggleContainer.querySelector('#lk-btn-ko');
+    const btnEn = toggleContainer.querySelector('#lk-btn-en');
+
+    btnKo.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (currentToggleLanguage === 'KO') return;
+        currentToggleLanguage = 'KO';
+        browserAPI.storage.local.set({ preferredLanguage: 'KO' });
+        updateToggleButtonsUI();
+        if (problemDataCache[slug]) {
+            applyProblemTranslation(slug, problemDataCache[slug]);
+        }
+    });
+
+    btnEn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (currentToggleLanguage === 'EN') return;
+        currentToggleLanguage = 'EN';
+        browserAPI.storage.local.set({ preferredLanguage: 'EN' });
+        updateToggleButtonsUI();
+        restoreOriginalProblem(slug);
+    });
+
+    container.appendChild(toggleContainer);
+}
+
+function updateToggleButtonsUI() {
+    const btnKo = document.getElementById('lk-btn-ko');
+    const btnEn = document.getElementById('lk-btn-en');
+    if (btnKo && btnEn) {
+        if (currentToggleLanguage === 'KO') {
+            btnKo.classList.add('active');
+            btnEn.classList.remove('active');
+        } else {
+            btnEn.classList.add('active');
+            btnKo.classList.remove('active');
+        }
+    }
+}
+
+function restoreOriginalProblem(slug) {
+    const titleEl = findTitleElement();
+    if (titleEl && originalProblemDataCache[slug] && originalProblemDataCache[slug].title) {
+        titleEl.textContent = originalProblemDataCache[slug].title;
+    }
+
+    const descEl = findDescriptionElement();
+    if (descEl && originalProblemDataCache[slug] && originalProblemDataCache[slug].descriptionHTML) {
+        safeSetInnerHTML(descEl, originalProblemDataCache[slug].descriptionHTML);
+    }
+
+    const allDivs = document.querySelectorAll('div');
+    for (const div of allDivs) {
+        const text = div.textContent.trim();
+        if ((/^Hint \d+$/.test(text) || /^힌트 \d+$/.test(text)) && div.children.length === 0) {
+            const clickTarget = div.closest('[class*="cursor-pointer"]') || div.parentElement;
+            if (clickTarget) {
+                const contentEl = findHintContent(clickTarget);
+                if (contentEl && originalProblemDataCache[slug] && originalProblemDataCache[slug].hints) {
+                    const idx = contentEl._hintIndex;
+                    if (idx !== undefined && originalProblemDataCache[slug].hints[idx] !== undefined) {
+                        contentEl.textContent = originalProblemDataCache[slug].hints[idx];
+                    }
+                }
+            }
+        }
+    }
+}
+
 function applyProblemTranslation(slug, data) {
     let success = false;
+
     if (data.title) {
         const titleEl = findTitleElement();
         if (titleEl) {
@@ -924,111 +1671,147 @@ function applyProblemTranslation(slug, data) {
                 return false;
             }
 
-            if (!titleEl.hasAttribute('data-original-title')) {
-                titleEl.setAttribute('data-original-title', titleEl.textContent.trim());
+            if (!originalProblemDataCache[slug]) {
+                originalProblemDataCache[slug] = {};
             }
-            titleEl.textContent = numMatch ? `${numMatch[1]}. ${data.title}` : data.title;
-            titleEl.setAttribute('data-translated-title', data.title);
+            if (!originalProblemDataCache[slug].title) {
+                if (data.englishTitle) {
+                    originalProblemDataCache[slug].title = numMatch ? `${numMatch[1]}. ${data.englishTitle}` : data.englishTitle;
+                } else {
+                    originalProblemDataCache[slug].title = titleEl.textContent.trim();
+                }
+            }
+
+            const translatedTitle = numMatch ? `${numMatch[1]}. ${data.title}` : data.title;
+
+            if (currentToggleLanguage === 'KO') {
+                titleEl.textContent = translatedTitle;
+            } else if (originalProblemDataCache[slug].title) {
+                titleEl.textContent = originalProblemDataCache[slug].title;
+            }
             success = true;
         }
     }
+
     if (data.description) {
         const descEl = findDescriptionElement();
         if (descEl) {
-            const interactiveSelectors = 'button, a, [data-keyword]';
+            if (!originalProblemDataCache[slug]) {
+                originalProblemDataCache[slug] = {};
+            }
+            if (!originalProblemDataCache[slug].descriptionHTML) {
+                originalProblemDataCache[slug].descriptionHTML = descEl.innerHTML;
+            }
 
-            const globalInteractivePool = new Map();
-            descEl.querySelectorAll(interactiveSelectors).forEach(el => {
-                const kw = el.getAttribute('data-keyword');
-                if (kw) {
-                    if (!globalInteractivePool.has(kw)) globalInteractivePool.set(kw, []);
-                    globalInteractivePool.get(kw).push(el);
-                } else {
-                    const id = el.tagName + ":" + el.textContent.trim();
-                    if (!globalInteractivePool.has(id)) globalInteractivePool.set(id, []);
-                    globalInteractivePool.get(id).push(el);
-                }
-            });
-
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = data.description;
-
-            function patchNodes(original, translated) {
-                if (translated.nodeType === 3) {
-                    if (original.nodeType === 3) {
-                        if (original.nodeValue !== translated.nodeValue) original.nodeValue = translated.nodeValue;
+            if (!originalProblemDataCache[slug].translatedHTML) {
+                const interactiveSelectors = 'button, a, [data-keyword]';
+                const globalInteractivePool = new Map();
+                descEl.querySelectorAll(interactiveSelectors).forEach(el => {
+                    const kw = el.getAttribute('data-keyword');
+                    if (kw) {
+                        if (!globalInteractivePool.has(kw)) globalInteractivePool.set(kw, []);
+                        globalInteractivePool.get(kw).push(el);
                     } else {
-                        original.parentNode?.replaceChild(document.createTextNode(translated.nodeValue), original);
+                        const id = el.tagName + ":" + el.textContent.trim();
+                        if (!globalInteractivePool.has(id)) globalInteractivePool.set(id, []);
+                        globalInteractivePool.get(id).push(el);
                     }
-                    return;
-                }
+                });
 
-                if (translated.nodeType === 1) {
-                    if (original.nodeType !== 1 || original.tagName !== translated.tagName) {
-                        if (!translated.querySelector(interactiveSelectors)) {
-                            original.parentNode?.replaceChild(translated.cloneNode(true), original);
-                            return;
+                const tempDiv = document.createElement('div');
+                const parsedDoc = new DOMParser().parseFromString(data.description, 'text/html');
+                tempDiv.replaceChildren(...parsedDoc.body.childNodes);
+
+                function patchNodes(original, translated) {
+                    if (translated.nodeType === 3) {
+                        if (original.nodeType === 3) {
+                            if (original.nodeValue !== translated.nodeValue) original.nodeValue = translated.nodeValue;
+                        } else {
+                            original.parentNode?.replaceChild(document.createTextNode(translated.nodeValue), original);
                         }
-                    }
-
-                    if (!original.querySelector(interactiveSelectors) && !translated.querySelector(interactiveSelectors)) {
-                        if (original.innerHTML !== translated.innerHTML) original.innerHTML = translated.innerHTML;
                         return;
                     }
 
-                    const oChildren = Array.from(original.childNodes);
-                    const tChildren = Array.from(translated.childNodes);
-
-                    const tagPool = {};
-                    oChildren.forEach(node => {
-                        if (node.nodeType === 1 && !node.getAttribute('data-keyword')) {
-                            const tag = node.tagName;
-                            if (!tagPool[tag]) tagPool[tag] = [];
-                            tagPool[tag].push(node);
-                        }
-                    });
-
-                    while (original.firstChild) original.removeChild(original.firstChild);
-
-                    tChildren.forEach(tChild => {
-                        if (tChild.nodeType === 3) {
-                            original.appendChild(document.createTextNode(tChild.nodeValue));
-                        } else if (tChild.nodeType === 1) {
-                            let match = null;
-                            const kw = tChild.getAttribute('data-keyword');
-                            const id = tChild.tagName + ":" + tChild.textContent.trim();
-
-                            if (kw && globalInteractivePool.has(kw) && globalInteractivePool.get(kw).length > 0) {
-                                match = globalInteractivePool.get(kw).shift();
-                            } else if (globalInteractivePool.has(id) && globalInteractivePool.get(id).length > 0) {
-                                match = globalInteractivePool.get(id).shift();
-                            } else {
-                                const tag = tChild.tagName;
-                                if (tagPool[tag] && tagPool[tag].length > 0) match = tagPool[tag].shift();
+                    if (translated.nodeType === 1) {
+                        if (original.nodeType !== 1 || original.tagName !== translated.tagName) {
+                            if (!translated.querySelector(interactiveSelectors)) {
+                                original.parentNode?.replaceChild(translated.cloneNode(true), original);
+                                return;
                             }
+                        }
 
-                            if (match) {
-                                if (match.parentNode && match.parentNode !== original) {
-                                    match.parentNode.removeChild(match);
+                        if (!original.querySelector(interactiveSelectors) && !translated.querySelector(interactiveSelectors)) {
+                            if (original.innerHTML !== translated.innerHTML) {
+                                original.replaceChildren(...Array.from(translated.childNodes).map(n => n.cloneNode(true)));
+                            }
+                            return;
+                        }
+
+                        const oChildren = Array.from(original.childNodes);
+                        const tChildren = Array.from(translated.childNodes);
+
+                        const tagPool = {};
+                        oChildren.forEach(node => {
+                            if (node.nodeType === 1 && !node.getAttribute('data-keyword')) {
+                                const tag = node.tagName;
+                                if (!tagPool[tag]) tagPool[tag] = [];
+                                tagPool[tag].push(node);
+                            }
+                        });
+
+                        while (original.firstChild) original.removeChild(original.firstChild);
+
+                        tChildren.forEach(tChild => {
+                            if (tChild.nodeType === 3) {
+                                original.appendChild(document.createTextNode(tChild.nodeValue));
+                            } else if (tChild.nodeType === 1) {
+                                let match = null;
+                                const kw = tChild.getAttribute('data-keyword');
+                                const id = tChild.tagName + ":" + tChild.textContent.trim();
+
+                                if (kw && globalInteractivePool.has(kw) && globalInteractivePool.get(kw).length > 0) {
+                                    match = globalInteractivePool.get(kw).shift();
+                                } else if (globalInteractivePool.has(id) && globalInteractivePool.get(id).length > 0) {
+                                    match = globalInteractivePool.get(id).shift();
+                                } else {
+                                    const tag = tChild.tagName;
+                                    if (tagPool[tag] && tagPool[tag].length > 0) match = tagPool[tag].shift();
                                 }
-                                patchNodes(match, tChild);
-                                original.appendChild(match);
-                            } else {
-                                original.appendChild(tChild.cloneNode(true));
+
+                                if (match) {
+                                    if (match.parentNode && match.parentNode !== original) {
+                                        match.parentNode.removeChild(match);
+                                    }
+                                    patchNodes(match, tChild);
+                                    original.appendChild(match);
+                                } else {
+                                    original.appendChild(tChild.cloneNode(true));
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
+
+                patchNodes(descEl, tempDiv);
+                originalProblemDataCache[slug].translatedHTML = descEl.innerHTML;
             }
 
-            patchNodes(descEl, tempDiv);
+            if (currentToggleLanguage === 'KO') {
+                safeSetInnerHTML(descEl, originalProblemDataCache[slug].translatedHTML);
+            } else if (originalProblemDataCache[slug].descriptionHTML) {
+                safeSetInnerHTML(descEl, originalProblemDataCache[slug].descriptionHTML);
+            }
             success = true;
         }
     }
+
     if (data.hints && data.hints.length > 0) {
         pendingHintTranslations = data.hints;
         applyHintsIfExpanded();
     }
+
+    injectTogglePill(slug);
+
     return success;
 }
 
@@ -1036,6 +1819,16 @@ let pendingHintTranslations = null;
 
 function applyHintsIfExpanded() {
     if (!pendingHintTranslations || pendingHintTranslations.length === 0) return;
+
+    const slug = extractProblemSlug();
+    if (!slug) return;
+
+    if (!originalProblemDataCache[slug]) {
+        originalProblemDataCache[slug] = {};
+    }
+    if (!originalProblemDataCache[slug].hints) {
+        originalProblemDataCache[slug].hints = [];
+    }
 
     const allDivs = document.querySelectorAll('div');
     let hintIndex = 0;
@@ -1049,15 +1842,22 @@ function applyHintsIfExpanded() {
                 if (contentEl && hintIndex < pendingHintTranslations.length) {
                     const originalText = contentEl.textContent.trim();
 
-                    if (originalText !== pendingHintTranslations[hintIndex] && originalText.length > 5) {
-                        if (!contentEl.hasAttribute('data-original-hint')) {
-                            contentEl.setAttribute('data-original-hint', originalText);
-                        }
-                        contentEl.textContent = pendingHintTranslations[hintIndex];
+                    contentEl._hintIndex = hintIndex;
+
+                    if (originalProblemDataCache[slug].hints[hintIndex] === undefined) {
+                        originalProblemDataCache[slug].hints[hintIndex] = originalText;
                     }
+
+                    if (originalText.length > 5) {
+                        if (currentToggleLanguage === 'KO') {
+                            contentEl.textContent = pendingHintTranslations[hintIndex];
+                        } else {
+                            contentEl.textContent = originalProblemDataCache[slug].hints[hintIndex];
+                        }
+                    }
+                    hintIndex++;
                 }
             }
-            hintIndex++;
         }
     }
 }
@@ -1079,18 +1879,16 @@ async function translateProblemList() {
     if (!isTranslationEnabled || !isProblemJsonEnabled) return;
 
     if (!problemDataCache) {
-        try {
-            const res = await fetch(chrome.runtime.getURL('src/problem.json'));
-            problemDataCache = await res.json();
-        } catch { return; }
+        await fetchProblemData();
+        if (!problemDataCache) return;
     }
 
-    if (window.location.href.includes('/studyplan/') || window.location.href.includes('/u/')) {
+    if (window.location.href.includes('/studyplan/') || window.location.href.includes('/u/') || window.location.href.includes('/contest/')) {
         buildTitleMap();
     }
 
     const candidates = document.querySelectorAll('div, span, a, p');
-    const isProblemPage = window.location.pathname.includes('/problems/');
+
 
     for (const el of candidates) {
         if (el.hasAttribute('data-translated-title')) continue;
@@ -1118,34 +1916,90 @@ async function translateProblemList() {
         let translated = false;
 
         const match = text.match(/^(\d+)\.\s+(.+)$/);
-        if (match && !isProblemPage) {
+        const contestMatch = text.match(/^(Q\d+)\.\s+(.+)$/i);
+
+        if (match) {
             const id = match[1];
             const titlePart = match[2].trim();
 
+            let foundData = null;
             for (const slug in problemDataCache) {
-                const data = problemDataCache[slug];
-                if (data.id === id) {
-                    const isTitleMatch = titlePart === data.englishTitle ||
-                        text.toLowerCase().includes(data.englishTitle.toLowerCase()) ||
-                        window.location.href.includes('/studyplan/') || window.location.href.includes('/u/');
-
-                    if (isTitleMatch) {
-                        if (targetTextNode) {
-                            targetTextNode.nodeValue = targetTextNode.nodeValue.replace(text, `${id}. ${data.title}`);
-                        } else {
-                            el.textContent = `${id}. ${data.title}`;
-                        }
-                        el.setAttribute('data-translated-title', 'true');
-                        translated = true;
-                    }
+                if (problemDataCache[slug].id === id) {
+                    foundData = problemDataCache[slug];
                     break;
                 }
             }
+
+            if (foundData) {
+                const isTitleMatch = titlePart === foundData.englishTitle ||
+                    text.toLowerCase().includes(foundData.englishTitle.toLowerCase()) ||
+                    window.location.href.includes('/studyplan/') || window.location.href.includes('/u/');
+
+                if (isTitleMatch) {
+                    const activeSlug = extractProblemSlug();
+                    if (activeSlug && problemDataCache[activeSlug] && problemDataCache[activeSlug].id === id) {
+                        if (currentToggleLanguage === 'EN') {
+                            const engTitle = `${id}. ${foundData.englishTitle || titlePart}`;
+                            if (targetTextNode) {
+                                targetTextNode.nodeValue = targetTextNode.nodeValue.replace(text, engTitle);
+                            } else {
+                                el.textContent = engTitle;
+                            }
+                            el.setAttribute('data-translated-title', 'true');
+                            translated = true;
+                            continue;
+                        }
+                    }
+
+                    if (targetTextNode) {
+                        targetTextNode.nodeValue = targetTextNode.nodeValue.replace(text, `${id}. ${foundData.title}`);
+                    } else {
+                        el.textContent = `${id}. ${foundData.title}`;
+                    }
+                    el.setAttribute('data-translated-title', 'true');
+                    translated = true;
+                }
+            } else {
+                queueIdFetch(id);
+            }
         }
 
-        if (!translated && (window.location.href.includes('/studyplan/') || window.location.href.includes('/u/'))) {
+        if (!translated && (window.location.href.includes('/contest/') || window.location.href.includes('/studyplan/') || window.location.href.includes('/u/'))) {
+            const cMatch = text.match(/^(Q\d+)\.\s+(.+)$/i);
+            const effectiveText = cMatch ? cMatch[2].trim() : text;
+            const prefix = cMatch ? cMatch[1] + ". " : "";
+
+            const normalizedText = effectiveText.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (normalizedText.length > 3 && englishToKoreanTitleMap.has(normalizedText)) {
+                const activeSlug = extractProblemSlug();
+                if (activeSlug && normalizedText === activeSlug.toLowerCase().replace(/[^a-z0-9]/g, '')) {
+                    if (currentToggleLanguage === 'EN') {
+                        continue;
+                    }
+                }
+
+                const translatedTitle = englishToKoreanTitleMap.get(normalizedText);
+                const result = `${prefix}${translatedTitle}`;
+                if (targetTextNode) {
+                    targetTextNode.nodeValue = targetTextNode.nodeValue.replace(text, result);
+                } else {
+                    el.textContent = result;
+                }
+                el.setAttribute('data-translated-title', 'true');
+                translated = true;
+            }
+        }
+
+        if (!translated && (window.location.href.includes('/studyplan/') || window.location.href.includes('/u/') || window.location.href.includes('/contest/'))) {
             const normalizedText = text.toLowerCase().replace(/[^a-z0-9]/g, '');
             if (normalizedText.length > 3 && englishToKoreanTitleMap.has(normalizedText)) {
+                const activeSlug = extractProblemSlug();
+                if (activeSlug && normalizedText === activeSlug.toLowerCase().replace(/[^a-z0-9]/g, '')) {
+                    if (currentToggleLanguage === 'EN') {
+                        continue;
+                    }
+                }
+
                 const translatedTitle = englishToKoreanTitleMap.get(normalizedText);
                 if (targetTextNode) {
                     targetTextNode.nodeValue = targetTextNode.nodeValue.replace(text, translatedTitle);
@@ -1168,6 +2022,7 @@ async function translateProblemList() {
             }
 
             if (aTag && aTag.href) {
+                if (aTag.href.includes('/solutions/')) continue;
                 const urlMatch = aTag.href.match(/\/problems\/([^/?#]+)/);
                 if (urlMatch) {
                     const slug = urlMatch[1];
@@ -1175,7 +2030,22 @@ async function translateProblemList() {
                     if (data && data.title) {
                         const normalizedText = text.toLowerCase().replace(/[^a-z0-9]/g, '');
                         const normalizedSlug = slug.toLowerCase().replace(/[^a-z0-9]/g, '');
-                        if (normalizedText === normalizedSlug && normalizedText.length > 0) {
+                        const cleanText = normalizedText.replace(/^q\d+/, '');
+                        if ((normalizedText === normalizedSlug || cleanText === normalizedSlug) && normalizedText.length > 0) {
+                            const activeSlug = extractProblemSlug();
+                            if (activeSlug && slug === activeSlug) {
+                                if (currentToggleLanguage === 'EN') {
+                                    const engTitle = data.englishTitle || text;
+                                    if (targetTextNode) {
+                                        targetTextNode.nodeValue = targetTextNode.nodeValue.replace(text, engTitle);
+                                    } else {
+                                        el.textContent = engTitle;
+                                    }
+                                    el.setAttribute('data-translated-title', 'true');
+                                    continue;
+                                }
+                            }
+
                             if (targetTextNode) {
                                 targetTextNode.nodeValue = targetTextNode.nodeValue.replace(text, data.title);
                             } else {
@@ -1183,6 +2053,8 @@ async function translateProblemList() {
                             }
                             el.setAttribute('data-translated-title', 'true');
                         }
+                    } else {
+                        queueSlugFetch(slug);
                     }
                 }
             }
