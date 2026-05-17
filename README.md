@@ -6,8 +6,12 @@ LeetCode의 주요 인터페이스와 알고리즘 태그를 한국어로 번역
   <a href="https://chromewebstore.google.com/detail/hccpeleaejammfeofnokfkiaeoacefnp">
     <img src="https://github.com/user-attachments/assets/2438162f-68d0-41be-89f5-fa9084d2e50e" alt="Chrome 웹 스토어에서 다운로드" width="206px" height="58px" />
   </a>
+  <a href="https://addons.mozilla.org/ko/firefox/addon/leetcode-%ED%95%9C%EA%B8%80%ED%99%94/">
+    <img src="https://github.com/user-attachments/assets/32da6f06-805d-48e3-8303-afd5ffce4c4b" alt="Firefox 애드온에서 다운로드" width="206px" height="58px" />
+  </a>
   <br />
-  <img src="https://img.shields.io/chrome-web-store/v/hccpeleaejammfeofnokfkiaeoacefnp?style=for-the-badge&label=Version&color=brown" alt="Chrome Store Version" />
+  <img src="https://img.shields.io/chrome-web-store/v/hccpeleaejammfeofnokfkiaeoacefnp?style=for-the-badge&label=Chrome&color=brown" alt="Chrome Store Version" />
+  <img src="https://img.shields.io/amo/v/leetcode-%ED%95%9C%EA%B8%80%ED%99%94?style=for-the-badge&label=Firefox&color=brown" alt="Firefox Add-on Version" />
 </div>
 
 ## 주요 기능
