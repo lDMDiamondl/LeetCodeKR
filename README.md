@@ -1,6 +1,6 @@
-# LeetCode KR UI 한글화 (LeetCode UI Korean Translator)
+# LeetCode 한글화 (LeetCode Korean Translate)
 
-LeetCode의 주요 인터페이스와 알고리즘 태그를 한국어로 번역해주는 크롬 익스텐션입니다.
+LeetCode의 주요 인터페이스와 알고리즘 태그, 문제 지문을 한국어로 번역해주는 크롬 익스텐션입니다.
 
 <div align="center">
   <a href="https://chromewebstore.google.com/detail/hccpeleaejammfeofnokfkiaeoacefnp">
